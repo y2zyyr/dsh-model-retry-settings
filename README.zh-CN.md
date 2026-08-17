@@ -1,96 +1,136 @@
 # dsh-model-retry-settings
 
-让 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的**模型请求最大重试次数**可以在 **设置 → 通用设置** 中直接配置，并且让 Harness runtime **真正遵守**该配置。
+直接在 DSH Desktop 设置中配置模型请求失败后的最大自动重试次数。
 
-这是一个纯插件实现：**不修改 core、不 patch 对话 UI、不做 DOM 注入**。
+[English (README.md)](README.md)
 
-## 插件用途
+## 功能
 
-- 在 **DSH Desktop → 设置 → 通用设置** 中新增一行：
-
-  > **模型请求最大重试次数** — `[ 2 ▼ ]`（候选值 0 / 1 / 2 / 3 / 5 / 10）
-
-  > 模型请求因可重试错误失败时，最多自动重新请求的次数。0 表示关闭自动重试。
-
-- 配置持久化到 `~/.dsh/settings.yaml`：
-
-  ```yaml
-  model-retry:
-    maxRetries: 5
-  ```
-
-- Harness runtime **实际执行**该次数：插件在 `dsh-llm-retry` 处理模型请求失败之前，覆写每个 `normal` retry policy 的 `maxRetries`。对话中的状态行会自动显示 **已重试模型请求 (1/5)、(2/5)…**，无需修改任何 UI。
+- **原生 DSH Desktop 设置集成** — 在 **设置 → 通用设置** 中新增偏好行。
+- **全局重试上限** — 一个值应用于所有使用 DSH normal 重试策略的模型 provider。
+- **可选值：** `0 / 1 / 2 / 3 / 5 / 10`
+- **默认值：** `2`（与 DSH 内置默认完全一致——安装插件后不修改设置，行为不变）
+- **持久化配置** — 关闭/重开设置、重启应用后都保留。
+- **配置即时生效** — 修改后下一次失败的模型请求立即生效，无需重启。
+- **保留 DSH 现有行为**：可重试错误分类、指数退避 / 抖动 / provider Retry-After、请求取消、对话重试指示。
+- **无需修改 DSH 核心** — 纯插件实现。
 
 ## 设置位置
 
-DSH Desktop → **设置** → **通用设置** → **模型请求最大重试次数**
+```
+DSH Desktop
+→ Settings
+→ General
+→ Maximum model request retries   [ 2 ▼ ]
+```
 
-## 默认值与选项
+中文：
 
-| 属性 | 值 |
-| --- | --- |
-| 默认值 | `2`（与 DSH 内置默认完全一致，安装后行为不变） |
-| 可选值 | `0 / 1 / 2 / 3 / 5 / 10` |
-| `0` 的含义 | 关闭自动重试（可重试错误失败后不再重试） |
-| 运行时校验 | 整数，`0 ≤ maxRetries ≤ 10` |
-| 非法值 | 一律回退为 `2`（禁止无限重试、禁止负数） |
+```
+DSH Desktop
+→ 设置
+→ 通用设置
+→ 模型请求最大重试次数   [ 2 ▼ ]
+```
 
-## 重要：重试次数的定义
+安装插件后**如果不修改设置**，会保持 DSH 现有默认行为：**`2`**。
 
-**“最大重试次数”不包含首次请求。**
+## 重试次数定义
 
-- 设置 `2` = 首次请求失败后**最多再自动重试 2 次** = **最多 3 次**模型请求。
-- 设置 `0` = 不自动重试。
-- 对话中显示的 `已重试模型请求 (retry/maxRetries)` 分母与 runtime 实际执行的值是**同一个值**：配置 == runtime == 显示。
+> 这里配置的“重试次数”**不包含首次模型请求**。
+
+- `0` = 只进行首次请求，不自动重试
+- `1` = 首次请求失败后最多再重试 1 次
+- `2` = 首次请求失败后最多再重试 2 次
+- `5` = 首次请求失败后最多再重试 5 次
+
+例如设置为 `2`：可重试失败后最多自动重试 2 次，**合计最多 3 次模型请求**。设置为 `0` 则关闭自动重试。
+
+## 本插件不改变什么
+
+本插件只改变 DSH **已经判定为可重试** 的模型请求的**最大重试次数**。它不会把任意错误变为可重试，也不会把认证/凭证类错误变成可重试错误。
+
+DSH 现已在重试的典型错误类别（如有）：`EMPTY_RESPONSE`、`RATE_LIMIT`、`SERVER`、`TIMEOUT`、`TRANSPORT`。这些内部类别不是稳定的公开 API，可能随 DSH 版本变化；重要的是本插件不改变这个分类。
+
+同样不改动：模型选择、Agent 预设、Token 用量统计、上下文窗口、temperature/推理设置、provider 认证与密钥、超时、限流分类、会话持久化、工具调用行为。
 
 ## 安装方法
 
-遵循 DSH web profile 的标准 bundle 安装方式（与 `dsh-token-usage-sidebar` 相同）：
+本包已发布到 npm registry，安装到你的 DSH web profile。
+
+**使用 DSH CLI（已验证）：**
 
 ```bash
-# 1. 获取代码后安装依赖并构建
-pnpm install && pnpm run build
-
-# 2. 编辑 ~/.dsh/profiles/web/package.json（增量追加，不要覆盖已有条目）：
-#    "dependencies":        { "dsh-model-retry-settings": "link:<本仓库绝对路径>" }
-#    "dsh.profile.bundles":  [ ..., "dsh-model-retry-settings" ]
-
-# 3. 安装 profile 依赖并重启 DSH
-cd ~/.dsh/profiles/web && pnpm install
-# 重启 DSH Desktop / web profile 后生效
+# profile 名称：'web'、'standard'、'code'、'desktop'...（请使用你实际使用的 profile）
+dsh plugin --profile web add @y2zyyr/dsh-model-retry-settings
 ```
 
-也可以通过 DSH GUI 的插件管理器安装（需配置对应的包来源）。
+**或直接用 npm/pnpm（与上面等价，并需同时加入 profile 的 dsh.profile.bundles）：**
 
-## 卸载方法
+```bash
+npm install @y2zyyr/dsh-model-retry-settings
+# 然后在 profile 的 package.json 中把 "@y2zyyr/dsh-model-retry-settings" 加入 dsh.profile.bundles
+```
 
-在插件管理中禁用/移除本插件即可：插件的设置注册与 listener 随插件 fiber 一起释放，retry 行为恢复 DSH 内置默认（2）。`settings.yaml` 中残留的 `model-retry:` 段不生效，可手动删除。
+安装后请**重启 DSH Desktop**，让新的插件 bundle 被加载。
 
-## 本插件不改变的内容（不变式）
+## 更新 / 卸载
 
-- 可重试错误分类（EMPTY_RESPONSE / RATE_LIMIT / SERVER / TIMEOUT / TRANSPORT）不变；401/403/凭证错误不会被重试。
-- 退避策略（指数退避 + jitter、优先遵循 provider 的 Retry-After）不变。
-- 取消语义（等待重试期间点击停止 / 取消）立即生效，不受重试次数影响。
-- 没有 retry policy 的 provider、以及 `mode: "always"` 的 policy 原样放行。
-- 修改配置后**下一次请求立即生效**，无需重启。
+**更新到新版本：**
 
-## 架构
+```bash
+dsh plugin --profile web update @y2zyyr/dsh-model-retry-settings
+```
 
-- **宿主端**（`src/index.ts`）：通过 `installSettingsSection`（`@deepseek-ai/dsh-settings`）注册 `model-retry` 命名空间；在 `agent/request-error` waterfall 上注册 **prepend** listener，对 `mode === "normal"` 的 policy 仅替换 `retryPolicy.maxRetries`。`dsh-llm-retry`（下一个 waterfall listener）按此计数执行并发出携带该值的 `llm/retry` 事件 —— 对话 UI 的分母就来自这里。
-- **客户端**（`src/client/index.tsx`）：向官方 `settings.general.item` slot（语言/外观行所在位置）注册一行偏好设置，通过 `settingsScope` 服务读写（宿主 RPC → `settings.yaml`）。
-- **校验**（`src/config.ts`）：唯一 normalizer，宿主 / 客户端 / 测试共用；非法值一律回退默认。
-- **持久化**：`dsh-settings-file` 写入 `~/.dsh/settings.yaml`（原子写、保留注释、热重载、重启安全）。
+**卸载 / 禁用：**
+
+```bash
+dsh plugin --profile web remove @y2zyyr/dsh-model-retry-settings
+```
+
+禁用或移除插件后，DSH 恢复原生重试行为（内置默认值）。若 `~/.dsh/settings.yaml` 中残留 `model-retry:` 段，它不会生效，可自行删除。插件不会自动清理之前保存的值。
+
+## 兼容性
+
+已针对 **DeepSeek Harness / DSH Desktop** 测试：
+
+- cordis `4.0.1`
+- `@deepseek-ai/dsh-settings` / `dsh-settings-file` `0.1.0-rc.6`
+- `@deepseek-ai/dsh-llm-retry` `0.1.0-rc.6`
+- schemastery `3.18.1`
+
+本插件依赖 DSH 的内部/RC 接口（`agent/request-error` 重试策略、settings seam、`settings.general.item` slot），这些接口可能随 DSH 版本变化。升级 DSH 后若设置失效，请核对插件版本与 DSH 版本是否匹配。
+
+## 工作原理
+
+```
+设置行
+→ 插件配置（浏览器 → 本地宿主接口）
+→ normal 重试策略 maxRetries
+→ 原生 @deepseek-ai/dsh-llm-retry
+→ 原生 llm/retry 事件
+→ 原生对话重试指示（"已重试模型请求 (n/max)"）
+```
+
+插件提供一个狭小的浏览器本地接口来读/写它自己的 maxRetries；宿主端通过 DSH settings seam 写入，落盘到 `~/.dsh/settings.yaml`。同时在 DSH 的 `agent/request-error` waterfall 上注册 prepend 监听，仅在 `mode === "normal"` 时覆写 `retryPolicy.maxRetries`，随后由原生重试引擎执行。
+
+### 安全说明
+
+当前 DSH 版本不会通过通用 Settings API 暴露任意插件 settings 命名空间。因此本插件为自己的 `maxRetries` 设置使用一个范围受限的本地宿主路由。该路由：
+
+- 仅暴露重试上限这一个值（也只接受这一个值），
+- 校验支持的范围（`0 ≤ maxRetries ≤ 10`，整数），
+- 限制在本地/受信任的 DSH 浏览器上下文内，
+- 不提供对 DSH 设置的任意访问。
 
 ## 开发
 
 ```bash
-pnpm install
-pnpm run build    # src/ → lib/index.js（宿主）+ lib/client.js（浏览器）
-pnpm test         # node --test test/*.test.mjs：单元 + 集成（真实 cordis / llm-retry）
-pnpm run typecheck
+npm install
+npm run test        # 单元 + 集成测试
+npm run typecheck
+npm run build       # src → lib/index.js（宿主）+ lib/client.js（浏览器）
 ```
-
-测试使用真实的 Cordis Context 与真实的 `@deepseek-ai/dsh-llm-retry`，通过真实的 `agent/request-error` waterfall 驱动合成失败——**不发起真实 provider 请求、不消耗 token**。
 
 ## 许可证
 

@@ -1,5 +1,5 @@
 {
-  "name": "dsh-model-retry-settings",
+  "name": "@y2zyyr/dsh-model-retry-settings",
   "version": "1.0.0",
   "description": "Configurable model-request retry limit for DeepSeek Harness (Settings → General).",
   "type": "module",
@@ -24,9 +24,7 @@
       "inject": [
         "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-locale",
-        "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-ui-slots",
-        "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-client-ui-primitives"
       ],
       "platform": "web"
@@ -41,16 +39,32 @@
     "LICENSE"
   ],
   "keywords": [
+    "dsh",
     "dsh-plugin",
     "deepseek-harness",
-    "dsh",
+    "deepseek",
     "retry",
-    "settings"
+    "llm",
+    "model",
+    "desktop",
+    "settings",
+    "plugin"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test 'test/*.test.mjs'",
     "typecheck": "tsc --noEmit"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/y2zyyr/dsh-model-retry-settings.git"
+  },
+  "homepage": "https://github.com/y2zyyr/dsh-model-retry-settings#readme",
+  "bugs": {
+    "url": "https://github.com/y2zyyr/dsh-model-retry-settings/issues"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",

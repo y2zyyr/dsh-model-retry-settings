@@ -11,6 +11,8 @@ client.js
 
 pnpm-workspace.yaml
 
+*.tgz
+
 # Test/build output and logs
 coverage/
 .nyc_output/

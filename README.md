@@ -1,129 +1,136 @@
 # dsh-model-retry-settings
 
-Make the **model-request retry limit** of [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) user-configurable from **Settings → General (通用设置)**, and have the runtime actually honor it.
+Configure the **maximum number of automatic model-request retries** directly from DSH Desktop.
 
-A pure plugin: **no core changes, no conversation-UI patches, no DOM hacks.**
+[中文说明 (README.zh-CN.md)](README.zh-CN.md)
 
-## What it does
+## Features
 
-- Adds one preference row to **DSH Desktop → Settings → General**:
+- **Native DSH Desktop Settings integration** — a preference row in **Settings → General**.
+- **Global retry limit** — one value applies to every model provider that uses DSH's normal retry policy.
+- **Values:** `0 / 1 / 2 / 3 / 5 / 10`
+- **Default:** `2` (identical to DSH's built-in default — installing the plugin changes nothing until you configure it)
+- **Persistent configuration** — survives closing/reopening Settings and app restarts.
+- **Live configuration updates** — changes apply to the next failed model request without restarting.
+- **Preserves DSH's existing behavior**: retryable-error classification, exponential backoff / jitter / provider Retry-After handling, request cancellation, and conversation retry rendering.
+- **No DSH core patch required** — a pure plugin.
 
-  > **Maximum model request retries** — `[ 2 ▼ ]` (options 0 / 1 / 2 / 3 / 5 / 10)
+## Where the setting appears
 
-  > Maximum number of automatic retries after a retryable model request failure. Set to 0 to disable automatic retries.
+```
+DSH Desktop
+→ Settings
+→ General
+→ Maximum model request retries   [ 2 ▼ ]
+```
 
-- The configured value is persisted to `~/.dsh/settings.yaml`:
+Chinese:
 
-  ```yaml
-  model-retry:
-    maxRetries: 5
-  ```
+```
+DSH Desktop
+→ 设置
+→ 通用设置
+→ 模型请求最大重试次数   [ 2 ▼ ]
+```
 
-- The Harness runtime **actually executes** that count: the plugin overrides the
-  `maxRetries` of every `normal` retry policy before `dsh-llm-retry` handles a
-  failed model request. The existing conversation status row then shows e.g.
-  **已重试模型请求 (1/5), (2/5), …** automatically — no UI changes.
+Installing the plugin **without changing the setting** preserves DSH's existing default behavior: **`2`**.
 
-## Why it exists
+## Retry semantics
 
-DSH's built-in default is 2 retries (initial request + 2 extra attempts). That
-number was previously only changeable by editing per-provider configuration
-sections by hand. This plugin exposes it as a first-class, validated setting.
+> The configured value is the number of **retries after** the initial model request. It does **not** count the initial request.
+
+- `0` = initial request only (no automatic retry)
+- `1` = initial request + up to 1 retry
+- `2` = initial request + up to 2 retries
+- `5` = initial request + up to 5 retries
+
+Example: with `2`, a retryable failure is retried automatically up to 2 more times — **at most 3 model requests** in total. With `0`, automatic model-request retry is disabled.
+
+## What it does NOT change
+
+This plugin only changes the **maximum retry count** for model requests that DSH **already considers retryable**. It does **not** make every error retryable, and authentication/credential errors are never turned into retries.
+
+Examples of error categories DSH already treats as retryable (when present): `EMPTY_RESPONSE`, `RATE_LIMIT`, `SERVER`, `TIMEOUT`, `TRANSPORT`. These internal categories are not a stable public API and may change between DSH versions; what matters is that this plugin leaves that classification untouched.
+
+Also untouched: model selection, agent presets, token accounting, context window, temperature/reasoning, provider authentication/keys, timeouts, rate-limit classification, session persistence, and tool-calling behavior.
 
 ## Installation
 
-The plugin follows the standard DSH web-profile bundle mechanism (same as
-`dsh-token-usage-sidebar`):
+This package is published to the npm registry. Install it into your DSH web profile.
+
+**Using the DSH CLI (verified):**
 
 ```bash
-# 1. clone / place the repo, then
-pnpm install && pnpm run build
-
-# 2. add to ~/.dsh/profiles/web/package.json:
-#    "dependencies":        { "dsh-model-retry-settings": "link:<absolute path to this repo>" }
-#    "dsh.profile.bundles":  [ ..., "dsh-model-retry-settings" ]
-
-# 3. install the profile dependency and restart DSH
-cd ~/.dsh/profiles/web && pnpm install
-# restart DSH Desktop / the web profile
+# Profile names: 'web', 'standard', 'code', 'desktop', ... (use your active profile)
+dsh plugin --profile web add @y2zyyr/dsh-model-retry-settings
 ```
 
-You can also install it through the DSH GUI plugin manager if a package source is
-configured for it. Both paths register the bundle + loader patch from
-`cordis.patch.yml`.
+**Or with npm/pnpm directly** (equivalent to the above; add it to your profile's `dsh.profile.bundles` as well):
 
-## Configuration
+```bash
+npm install @y2zyyr/dsh-model-retry-settings
+# then add "@y2zyyr/dsh-model-retry-settings" to dsh.profile.bundles in the profile's package.json
+```
 
-**Settings location:** DSH Desktop → Settings → General (通用设置) → *Maximum model request retries* (`模型请求最大重试次数`).
+After installation **restart DSH Desktop** so the new plugin bundle is loaded.
 
-| Property | Value |
-| --- | --- |
-| Default | `2` (identical to DSH's built-in default — install changes nothing) |
-| Options | `0 / 1 / 2 / 3 / 5 / 10` |
-| `0` | disables automatic retries |
-| Range enforced | integer `0 ≤ maxRetries ≤ 10` |
-| Invalid values | fall back to `2` (never unbounded, never negative) |
+## Update / Uninstall
 
-### Retry semantics
+**Update** to a newer version:
 
-**`maxRetries` counts retries AFTER the initial request.**
+```bash
+dsh plugin --profile web update @y2zyyr/dsh-model-retry-settings
+```
 
-- Setting `2` ⇔ *after the first request fails, retry automatically at most 2 more times* ⇔ at most **3** model requests in total.
-- Setting `0` ⇔ no automatic retry — a retryable failure is terminal.
-- The counter you see in the conversation (`已重试模型请求 (retry/maxRetries)`) uses the same value the runtime executed — configured == runtime == displayed.
+**Uninstall / disable:**
 
-### What the plugin does NOT change (invariants)
+```bash
+dsh plugin --profile web remove @y2zyyr/dsh-model-retry-settings
+```
 
-- **Retryable error classification** (EMPTY_RESPONSE / RATE_LIMIT / SERVER / TIMEOUT / TRANSPORT) is untouched; 401/403/credential errors are never retried.
-- **Backoff** (exponential + jitter, provider `Retry-After` priority) is untouched.
-- **Cancellation** (Stop / Cancel during a pending retry wait) still cancels immediately.
-- Providers with no retry policy, or with `mode: "always"`, are passed through unchanged.
-- Changes apply to the **next** failed request — no restart needed after changing the value.
-
-## Architecture
-
-- **Host** (`src/index.ts`): registers the `model-retry` settings namespace via
-  `installSettingsSection` (`@deepseek-ai/dsh-settings`) and installs a
-  **prepend** listener on the `agent/request-error` waterfall that replaces only
-  `retryPolicy.maxRetries` for `mode === "normal"`. `dsh-llm-retry` (the next
-  waterfall listener) then executes that count and emits `llm/retry` events
-  carrying it — which is exactly what the conversation UI renders as the
-  denominator.
-- **Client** (`src/client/index.tsx`): registers one row into the official
-  `settings.general.item` slot (the same slot as the Language / Appearance
-  rows), reading/writing through the `settingsScope` service (host RPC →
-  `settings.yaml`).
-- **Validation** (`src/config.ts`): one normalizer shared by host, client, and
-  tests; invalid values always fall back to the default.
-- **Persistence**: `dsh-settings-file` writes `~/.dsh/settings.yaml` (atomic,
-  comment-preserving, hot-reloaded, restart-safe).
-
-## Uninstall behavior
-
-Removing/disabling the plugin removes its settings registration and its
-listener with the plugin fiber. The retry path returns exactly to DSH's built-in
-behavior (default 2). A leftover `model-retry:` section in
-`settings.yaml` is inert and can be deleted by hand.
+After the plugin is disabled or removed, DSH returns to its native retry behavior (the built-in default). If a `model-retry:` section remains in `~/.dsh/settings.yaml`, it is inert; you may delete it by hand if you wish. The plugin does not automatically clean up a previously saved value.
 
 ## Compatibility
 
-- Verified against DSH Desktop's shipped runtime (cordis 4.0.1, dsh-llm-retry
-  0.1.0-rc.6, dsh-settings 0.1.0-rc.6, schemastery 3.18.1).
-- zh-CN and en locales.
-- Light and dark themes (only `--dsw-alias-*` design tokens used).
+Tested against **DeepSeek Harness / DSH Desktop** with:
+
+- cordis `4.0.1`
+- `@deepseek-ai/dsh-settings` / `dsh-settings-file` `0.1.0-rc.6`
+- `@deepseek-ai/dsh-llm-retry` `0.1.0-rc.6`
+- schemastery `3.18.1`
+
+This plugin relies on DSH internal/RC interfaces (`agent/request-error` retry policy, the settings seam, and the `settings.general.item` slot) that could change across DSH releases. If you upgrade DSH and the setting stops working, verify the plugin version matches the DSH version.
+
+## How it works
+
+```
+Settings row
+→ plugin configuration (browser → host API)
+→ normal retry policy maxRetries
+→ native @deepseek-ai/dsh-llm-retry
+→ native llm/retry event
+→ native conversation retry indicator ("已重试模型请求 (n/max)")
+```
+
+The plugin hosts a small, browser-local API that reads/writes its own maxRetries value; the host writes it through the DSH settings seam, so it lands in `~/.dsh/settings.yaml`. A prepend listener on DSH's `agent/request-error` waterfall overrides only `retryPolicy.maxRetries` for `mode === "normal"` policies before the native retry engine runs.
+
+### Security note
+
+The current DSH version does not expose arbitrary plugin settings namespaces through its generic Settings API. This plugin therefore uses a narrowly scoped local host route for its own `maxRetries` setting. That route:
+
+- exposes **only** the retry-limit value (and accepts only that value),
+- validates the supported range (`0 ≤ maxRetries ≤ 10`, integer),
+- is restricted to the local/trusted DSH browser context,
+- does **not** provide arbitrary access to DSH settings.
 
 ## Development
 
 ```bash
-pnpm install
-pnpm run build    # src/ -> lib/index.js (host) + lib/client.js (browser)
-pnpm test         # node --test test/*.test.mjs — unit + integration (real cordis/llm-retry)
-pnpm run typecheck
+npm install
+npm run test        # unit + integration
+npm run typecheck
+npm run build       # src → lib/index.js (host) + lib/client.js (browser)
 ```
-
-Tests drive the real Cordis context and the real `@deepseek-ai/dsh-llm-retry`
-plugin through the real `agent/request-error` waterfall with synthetic
-failures — no real provider requests, no tokens consumed.
 
 ## License
 
