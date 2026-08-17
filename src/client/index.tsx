@@ -170,6 +170,10 @@ export function apply(ctx: DshContext): void {
   }
   const injected = (actions: { sync: (maxRetries: number, revision: number) => void }) => {
     bound = actions;
+    // On every row mount (the slot system rebinds a fresh store whose init is the
+    // default 2), immediately reconcile to the authoritative host value so an
+    // already-persisted selection (e.g. 5) is displayed instead of the default.
+    void refresh();
     return {
       setMaxRetries: (value: number) => {
         const next = normalizeMaxRetries(value);
