@@ -341,3 +341,20 @@ test('undefined retryPolicy passes through untouched (plugin never creates a pol
   assert.equal(payload.retryPolicy, undefined, 'payload.retryPolicy remains undefined');
   assert.equal(seenPayload.retryPolicy, undefined);
 });
+
+test('regression: config route registers only once webServer is available (inject ordering)', async () => {
+  // Live failure reproduction: with NO inject, apply() ran before webServer was
+  // provided, so ctx.get('webServer') was undefined and the route was silently
+  // skipped. The fix declares inject:['webServer','settings'] so apply() defers
+  // until webServer is ready. Prove the route is present once services are up.
+  const ctx = new Context();
+  const registrations = [];
+  const webServer = { register(route){ registrations.push(route); return () => {}; } };
+  const fakeSettings = { register(){ return { get(){return {maxRetries:2}}, watch(){return ()=>{}}, update:async()=>{}, replace:async()=>{} }; }, mutate:async()=>{}, get:()=>({maxRetries:2}) };
+  ctx.reflect.provide('webServer', webServer, () => true);
+  ctx.reflect.provide('settings', fakeSettings, () => true);
+  applyPlugin(ctx, {});
+  await tick();
+  const found = registrations.find((r) => r.kind === 'prefix' && r.path === '/model-retry-settings/api');
+  assert.ok(found, 'config route registered after services are available');
+});

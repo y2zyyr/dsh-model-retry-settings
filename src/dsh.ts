@@ -27,7 +27,10 @@ export interface LocaleService {
 
 /** Context extended with the DSH runtime service surface used by this plugin. */
 export type DshContext = Context & {
+  logger?: { warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void };
   get(name: string): unknown;
+  webServer?: WebServer;
+  settings?: SettingsLike;
   locale: LocaleService;
   slots: SlotsService;
   on(name: string, listener: (payload: RequestErrorPayload, next: RequestErrorNext) => unknown, prepend?: boolean): unknown;

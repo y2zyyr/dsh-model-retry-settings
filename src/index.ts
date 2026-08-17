@@ -21,6 +21,15 @@ import { Config, DEFAULT_MAX_RETRIES, FIELD, SETTINGS_NS, normalizeMaxRetries, o
 
 export const name = 'dsh-model-retry-settings';
 
+/**
+ * Required host services. Declaring `webServer` (and `settings`) makes Cordis
+ * defer this plugin's `apply()` until those services are provided — otherwise
+ * `apply()` would run before webServer is up and the config route would never
+ * register (the observed Phase 2.3 live failure). This matches the proven
+ * token-usage host-plugin pattern.
+ */
+export const inject = ['webServer', 'settings'];
+
 // Re-export the pure configuration API so tests (and future consumers) use the
 // same built artifact the runtime loads.
 export { Config, FIELD, SETTINGS_NS, overrideRetryPolicyMaxRetries } from './settings.ts';
@@ -83,9 +92,11 @@ async function readJsonBody(req: any): Promise<unknown> {
  * runtime) invariant without any core change.
  */
 function registerPluginApiRoute(ctx: DshContext, path: string, read: () => number): void {
-  if (typeof ctx.get !== 'function') return;
-  const webServer = (ctx as { get?: (n: string) => unknown }).get?.('webServer') as WebServer | undefined;
-  if (webServer === undefined || typeof webServer.register !== 'function') return;
+  const webServer = (ctx as unknown as { webServer?: WebServer }).webServer;
+  if (webServer === undefined || typeof webServer.register !== 'function') {
+    ctx.logger?.warn?.('dsh-model-retry-settings: webServer unavailable; config route not registered');
+    return;
+  }
   const dispose = webServer.register({
     kind: 'prefix',
     path,
@@ -104,9 +115,11 @@ function registerPluginApiRoute(ctx: DshContext, path: string, read: () => numbe
         const body = (await readJsonBody(req)) as { maxRetries?: unknown };
         const next = normalizeMaxRetries(body?.maxRetries);
         // Host-side settings write (un-gated seam) persists model-retry to settings.yaml.
-        const settings = (ctx as { get?: (n: string) => unknown }).get?.('settings') as SettingsLike | undefined;
+        const settings = (ctx as unknown as { settings?: SettingsLike }).settings;
         if (settings !== void 0 && typeof settings.mutate === 'function') {
           await settings.mutate(SETTINGS_NS, [{ op: 'set', path: [FIELD], value: next }]);
+        } else {
+          ctx.logger?.warn?.('dsh-model-retry-settings: settings seam unavailable; cannot persist selection');
         }
         writeJson(res, 200, { ok: true, value: read() });
       } catch (e) {
