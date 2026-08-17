@@ -280,6 +280,50 @@ test('live config change 2 -> 5 takes effect on the NEXT request-error without r
   assert.equal(retriesOf(after)[0].data.maxRetries, 5, 'next request-error uses 5 without restart');
 });
 
+
+test('regression: host-side settings write persists and feeds the runtime hook (plugin route backend)', async () => {
+  // The real DSH apiproxy refuses remote writes to the un-exposed 'model-retry'
+  // namespace (settings-not-exposed). The plugin therefore persists through the
+  // host settings seam directly. This test proves a host seam write persists and
+  // that the runtime hook picks up the new value on the next request-error.
+  const ctx = new Context();
+  const section = { maxRetries: 2 };
+  const watchers = new Set();
+  const fakeSettings = {
+    register(ns, schema, opts) {
+      const resolve = () => schema({ ...opts.base, ...section });
+      return {
+        get: () => resolve(),
+        watch: (cb) => { watchers.add(cb); return () => watchers.delete(cb); },
+        update: async (patch) => { Object.assign(section, patch); for (const cb of [...watchers]) cb(); },
+        replace: async (next) => { for (const k of Object.keys(section)) delete section[k]; Object.assign(section, next); for (const cb of [...watchers]) cb(); },
+      };
+    },
+    mutate: async (ns, ops) => { for (const op of ops) { if (op.op === 'set') section[op.path[0]] = op.value; } for (const cb of [...watchers]) cb(); },
+    get: (ns) => section,
+  };
+  ctx.provide('settings', fakeSettings);
+  applyPlugin(ctx, {});
+  applyRetry(ctx, {}, { random: () => 0.5 });
+  await tick();
+
+  // Initial: policy maxRetries 7 -> plugin overrides to 2 (current setting).
+  const e1 = [];
+  const a1 = makeAgent(e1);
+  await ctx.events.waterfall('agent/request-error', { agent: a1, turn: 1, step: 1, provider: 'fixture', failure: { code: 'SERVER' }, retryPolicy: policyWith(), signal: new AbortController().signal }, () => Promise.resolve(undefined));
+  assert.equal(retriesOf(e1)[0].data.maxRetries, 2, 'starts at current 2');
+
+  // Host seam write (the plugin route backend performs this): set maxRetries 5.
+  await fakeSettings.mutate('model-retry', [{ op: 'set', path: ['maxRetries'], value: 5 }]);
+  await tick();
+
+  const e2 = [];
+  const a2 = makeAgent(e2);
+  await ctx.events.waterfall('agent/request-error', { agent: a2, turn: 2, step: 1, provider: 'fixture', failure: { code: 'SERVER' }, retryPolicy: policyWith(), signal: new AbortController().signal }, () => Promise.resolve(undefined));
+  assert.equal(retriesOf(e2)[0].data.maxRetries, 5, 'runtime uses 5 after host seam write');
+  assert.equal(section.maxRetries, 5, 'persisted value is 5');
+});
+
 test('undefined retryPolicy passes through untouched (plugin never creates a policy)', async () => {
   const ctx = new Context();
   applyPlugin(ctx, { maxRetries: 5 });

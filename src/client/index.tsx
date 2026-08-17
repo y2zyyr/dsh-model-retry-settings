@@ -3,9 +3,12 @@
 //
 // Registers one compact preference row into the official General settings
 // section (`settings.general.item`, the same slot LanguageRow / AppearanceRow
-// use). The row binds the `model-retry` namespace through the settingsScope
-// service; every selection is persisted host-side (settings.mutate RPC ->
-// dsh-settings-file -> ~/.dsh/settings.yaml) — no localStorage, no direct fs.
+// use). Persistence flows through the plugin's OWN browser-fenced host route
+// (`/model-retry-settings/api`) instead of the per-namespace settingsScope
+// RPC, because the core /api apiproxy does not expose the `model-retry`
+// namespace to remote configuration clients (settings-not-exposed). The host
+// route writes through the same settings seam, so the value still lands in the
+// `model-retry:` section of ~/.dsh/settings.yaml that the runtime hook reads.
 import { useCallback, useEffect, useState } from 'react';
 import { defineStore } from '@deepseek-ai/dsh-client-runtime/client';
 import { IconChevronDownOutline14, Menu } from '@deepseek-ai/dsh-client-ui-primitives';
@@ -13,7 +16,9 @@ import type { DshContext } from '../dsh.ts';
 import { DEFAULT_MAX_RETRIES, RETRY_OPTIONS, normalizeMaxRetries } from '../config.ts';
 import { en, LOCALE_NS, zh } from '../locale.ts';
 
-export const inject = ['slots', 'locale', 'connection', 'remote', 'settingsScope'];
+export const inject = ['slots', 'locale'];
+
+const API_URL = '/model-retry-settings/api';
 
 const STYLE_ID = 'dsh-model-retry-settings/row.css';
 const CSS = `.dmrs-row{border-bottom:1px solid var(--dsw-alias-border-l2);align-items:center;gap:12px;padding:16px 0;display:flex}
@@ -37,12 +42,43 @@ const store = defineStore({
     sync: (d: RowStoreSnapshot, maxRetries: number, revision: number) => {
       if (revision <= d.revision) return;
       d.maxRetries = maxRetries;
+      d.options = RETRY_OPTIONS;
       d.revision = revision;
     },
   },
 });
 
 type Translate = (key: string) => string;
+
+/** Fetch the current effective maxRetries from the plugin host route. */
+async function fetchMaxRetries(signal?: AbortSignal): Promise<number | undefined> {
+  try {
+    const res = await fetch(API_URL, { method: 'GET', signal, cache: 'no-store' });
+    if (!res.ok) return undefined;
+    const json = (await res.json()) as { ok?: boolean; value?: unknown };
+    if (json?.ok !== true) return undefined;
+    return normalizeMaxRetries(json.value);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Persist a selection through the plugin host route and echo the authoritative value. */
+async function writeMaxRetries(value: number, signal?: AbortSignal): Promise<number | undefined> {
+  try {
+    const next = normalizeMaxRetries(value);
+    const res = await fetch(API_URL, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ maxRetries: next }), signal, cache: 'no-store',
+    });
+    if (!res.ok) return undefined;
+    const json = (await res.json()) as { ok?: boolean; value?: unknown };
+    if (json?.ok !== true) return undefined;
+    return normalizeMaxRetries(json.value);
+  } catch {
+    return undefined;
+  }
+}
 
 export function ModelRetryRow({
   t,
@@ -100,34 +136,47 @@ export function ModelRetryRow({
   );
 }
 
-/** Client plugin body: dictionaries, settings scope, and the General row. */
+/** Client plugin body: dictionaries, plugin-config route, and the General row. */
 export function apply(ctx: DshContext): void {
   ctx.effect(() => {
     ctx.locale.register(LOCALE_NS, { zh, en });
   }, 'dsh-model-retry-settings: dictionaries');
   const t = ctx.locale.bind(LOCALE_NS) as Translate;
-  const controller = ctx.settingsScope.bind({ namespace: 'model-retry' });
   let bound: { sync: (maxRetries: number, revision: number) => void } | undefined;
-  const sync = () => {
-    const snapshot = controller.getSnapshot() as { value?: { maxRetries?: unknown }; revision?: number } | undefined;
-    const raw = snapshot?.value?.maxRetries;
-    const maxRetries = normalizeMaxRetries(raw);
-    const revision = snapshot?.revision ?? 0;
+  let revision = 0;
+  const sync = (maxRetries: number) => {
+    revision += 1;
     bound?.sync(maxRetries, revision);
   };
-  ctx.effect(() => {
-    const dispose = controller.subscribe(() => sync());
-    sync();
-    return dispose;
-  }, 'dsh-model-retry-settings: scope sync');
+  let disposed = false;
+  const refresh = async () => {
+    if (disposed) return;
+    const value = await fetchMaxRetries();
+    if (disposed || value === undefined) return;
+    sync(value);
+  };
+  // Initial load + refresh when the tab regains focus (the host value can change
+  // externally via settings.yaml too).
+  void refresh();
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    const onVisible = () => { if (!document.hidden) void refresh(); };
+    document.addEventListener('visibilitychange', onVisible);
+    const timer = setInterval(() => { if (!document.hidden) void refresh(); }, 3000);
+    ctx.effect(() => () => {
+      disposed = true;
+      document.removeEventListener('visibilitychange', onVisible);
+      clearInterval(timer);
+    }, 'dsh-model-retry-settings: polling cleanup');
+  }
   const injected = (actions: { sync: (maxRetries: number, revision: number) => void }) => {
     bound = actions;
-    sync();
     return {
       setMaxRetries: (value: number) => {
         const next = normalizeMaxRetries(value);
-        controller.set('maxRetries', next);
-        bound?.sync(next, (controller.getSnapshot() as { revision?: number } | undefined)?.revision ?? 0);
+        sync(next); // optimistic immediate echo
+        void writeMaxRetries(next).then((authoritative) => {
+          if (authoritative !== undefined) sync(authoritative);
+        });
       },
     };
   };

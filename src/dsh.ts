@@ -27,8 +27,8 @@ export interface LocaleService {
 
 /** Context extended with the DSH runtime service surface used by this plugin. */
 export type DshContext = Context & {
+  get(name: string): unknown;
   locale: LocaleService;
-  settingsScope: { bind(spec: { namespace: string }): SettingsScopeController };
   slots: SlotsService;
   on(name: string, listener: (payload: RequestErrorPayload, next: RequestErrorNext) => unknown, prepend?: boolean): unknown;
   effect(callback: () => unknown, label?: string): unknown;
@@ -44,3 +44,19 @@ export interface RequestErrorPayload {
   signal?: AbortSignal;
 }
 export type RequestErrorNext = () => Promise<unknown>;
+
+// Host-side WebServer face (provided by @deepseek-ai/dsh-host-webserver).
+export interface WebServerRoute {
+  kind: 'prefix' | 'exact' | string;
+  path: string;
+  handler: (req: unknown, res: unknown) => unknown | Promise<unknown>;
+}
+export interface WebServer {
+  register(route: WebServerRoute): () => void;
+}
+// Host-side settings seam (provided by @deepseek-ai/dsh-settings): the in-process
+// calls are NOT gated by the remote apiproxy exposure allowlist.
+export interface SettingsLike {
+  mutate(ns: string, ops: ReadonlyArray<{ op: 'set'|'unset'; path: ReadonlyArray<string>; value?: unknown }>, expectedRevision?: number): Promise<unknown>;
+  get(ns: string): unknown;
+}

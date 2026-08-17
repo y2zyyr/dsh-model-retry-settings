@@ -15,8 +15,8 @@
 // Mutation boundary: retryableCodes, backoff, providerRetryAfterMs, failure
 // code, signal, provider, turn, step, session are NEVER touched. Policies that
 // are undefined or mode "always" pass through unchanged.
-import type { DshContext, RequestErrorNext, RequestErrorPayload } from './dsh.ts';
 import { installSettingsSection } from '@deepseek-ai/dsh-settings';
+import type { DshContext, RequestErrorNext, RequestErrorPayload, SettingsLike, WebServer } from './dsh.ts';
 import { Config, DEFAULT_MAX_RETRIES, FIELD, SETTINGS_NS, normalizeMaxRetries, overrideRetryPolicyMaxRetries } from './settings.ts';
 
 export const name = 'dsh-model-retry-settings';
@@ -32,6 +32,92 @@ export function entryBaseMaxRetries(config: unknown): number {
     ? (config as Record<string, unknown>).maxRetries
     : undefined;
   return normalizeMaxRetries(max);
+}
+
+/**
+ * Browser-trust fence for the plugin's config route (mirrors the /api gateway
+ * rule): only loopback browsers / trusted loopback authorities may reach it.
+ */
+function isLoopbackHostname(hostname: string): boolean {
+  if (hostname === 'localhost' || hostname === '[::1]') return true;
+  const parts = hostname.split('.');
+  return parts.length === 4 && parts[0] === '127' && parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
+}
+function isTrustedApiRequest(request: { headers: Record<string, string | string[] | undefined> }): boolean {
+  const raw = request.headers['host'];
+  const host = typeof raw === 'string' ? raw : undefined;
+  if (host === undefined) return false;
+  const hostname = host.startsWith('[') ? host.slice(1, host.indexOf(']')) : host.split(':')[0];
+  if (!isLoopbackHostname(hostname)) return false;
+  if (request.headers['sec-fetch-site'] === 'cross-site') return false;
+  const origin = request.headers['origin'];
+  if (origin === undefined) return true;
+  try { return new URL(origin as string).host === host; } catch { return false; }
+}
+function writeJson(res: any, status: number, body: unknown): void {
+  if (typeof res.statusCode === 'number') res.statusCode = status;
+  if (typeof res.setHeader === 'function') res.setHeader('content-type', 'application/json');
+  res.end(JSON.stringify(body));
+}
+async function readJsonBody(req: any): Promise<unknown> {
+  let body = '';
+  for await (const chunk of req) body += String(chunk);
+  if (body.length === 0) return {};
+  try { return JSON.parse(body); } catch { return {}; }
+}
+
+/**
+ * Register the plugin's browser-trust-fenced configuration route.
+ *
+ *   GET  /model-retry-settings/api -> { ok, value: maxRetries }
+ *   POST /model-retry-settings/api { maxRetries } -> persists through
+ *        ctx.settings.mutate (the settings seam), then Returns { ok, value }.
+ *
+ * Why a plugin-owned route instead of the settingsScope client RPC: the core
+ * /api apiproxy serves only an allowlist of namespaces (model providers plus a
+ * small explicit set) and refuses any other namespace with `settings-not-exposed`
+ * even when registered; plugin self-exposure is deferred work in that package.
+ * The host-side settings seam is NOT gated, so writing through `ctx.settings`
+ * persists to the SAME `model-retry:` section of ~/.dsh/settings.yaml that the
+ * runtime hook reads — satisfying the single-source (configured == persisted ==
+ * runtime) invariant without any core change.
+ */
+function registerPluginApiRoute(ctx: DshContext, path: string, read: () => number): void {
+  if (typeof ctx.get !== 'function') return;
+  const webServer = (ctx as { get?: (n: string) => unknown }).get?.('webServer') as WebServer | undefined;
+  if (webServer === undefined || typeof webServer.register !== 'function') return;
+  const dispose = webServer.register({
+    kind: 'prefix',
+    path,
+    handler: async (req: any, res: any) => {
+      if (!isTrustedApiRequest(req)) { writeJson(res, 403, { ok: false, error: { code: 'forbidden', message: 'forbidden' } }); return; }
+      const pathname = new URL(req.url ?? '/', 'http://dsh.internal').pathname;
+      if (req.method === 'GET') {
+        writeJson(res, 200, { ok: true, value: read() });
+        return;
+      }
+      if (req.method !== 'POST' || pathname !== path) {
+        writeJson(res, 405, { ok: false, error: { code: 'method-error', message: 'method not allowed' } });
+        return;
+      }
+      try {
+        const body = (await readJsonBody(req)) as { maxRetries?: unknown };
+        const next = normalizeMaxRetries(body?.maxRetries);
+        // Host-side settings write (un-gated seam) persists model-retry to settings.yaml.
+        const settings = (ctx as { get?: (n: string) => unknown }).get?.('settings') as SettingsLike | undefined;
+        if (settings !== void 0 && typeof settings.mutate === 'function') {
+          await settings.mutate(SETTINGS_NS, [{ op: 'set', path: [FIELD], value: next }]);
+        }
+        writeJson(res, 200, { ok: true, value: read() });
+      } catch (e) {
+        writeJson(res, 500, { ok: false, error: { code: 'internal', message: String((e as Error)?.message ?? e) } });
+      }
+    },
+  });
+  // Keep the route alive until the plugin fiber unloads.
+  if (typeof ctx.effect === 'function') {
+    ctx.effect(() => { const stop = dispose; return () => { try { stop?.(); } catch { /* noop */ } }; }, 'dsh-model-retry-settings: config route');
+  }
 }
 
 export function apply(ctx: DshContext, config: unknown = {}): void {
@@ -53,6 +139,9 @@ export function apply(ctx: DshContext, config: unknown = {}): void {
       }
     },
   });
+
+  // Plugin-owned, browser-fenced configuration route (see doc above).
+  registerPluginApiRoute(ctx, '/model-retry-settings/api', () => effectiveMaxRetries);
 
   // PREPEND (true) -> runs before dsh-llm-retry in the agent/request-error waterfall.
   ctx.on('agent/request-error', (payload: RequestErrorPayload, next: RequestErrorNext) => {
