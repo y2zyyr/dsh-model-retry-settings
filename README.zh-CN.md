@@ -95,7 +95,7 @@ dsh plugin --profile web remove @y2zyyr/dsh-model-retry-settings
 已针对 **DeepSeek Harness / DSH Desktop** 测试：
 
 - cordis `4.0.1`
-- `@deepseek-ai/dsh-settings` / `dsh-settings-file` `0.1.0-rc.6`
+- `@deepseek-ai/dsh-settings` / `dsh-settings-file` `^0.1.0-rc.6`（v1.0.1 起放宽范围以通过 DSH Desktop 市场验证）
 - `@deepseek-ai/dsh-llm-retry` `0.1.0-rc.6`
 - schemastery `3.18.1`
 

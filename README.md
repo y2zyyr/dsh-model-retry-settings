@@ -95,7 +95,7 @@ After the plugin is disabled or removed, DSH returns to its native retry behavio
 Tested against **DeepSeek Harness / DSH Desktop** with:
 
 - cordis `4.0.1`
-- `@deepseek-ai/dsh-settings` / `dsh-settings-file` `0.1.0-rc.6`
+- `@deepseek-ai/dsh-settings` / `dsh-settings-file` `^0.1.0-rc.6` (v1.0.1 widened the range so the DSH Desktop market verifier accepts the package)
 - `@deepseek-ai/dsh-llm-retry` `0.1.0-rc.6`
 - schemastery `3.18.1`
 
