@@ -1,6 +1,6 @@
 {
   "name": "@y2zyyr/dsh-model-retry-settings",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Configurable model-request retry limit for DeepSeek Harness (Settings → General).",
   "type": "module",
   "main": "lib/index.js",
@@ -80,7 +80,7 @@
   },
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.1",
-    "@deepseek-ai/dsh-settings": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-settings": "^0.1.0-rc.6",
     "@deepseek-ai/schemastery": "^3.18.1"
   },
   "license": "MIT"
